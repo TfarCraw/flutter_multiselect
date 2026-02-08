@@ -1,351 +1,702 @@
+import 'dart:async';
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
-import 'package:flutter_multiselect/flutter_multiselect.dart';
 
-void main() => runApp(MyApp());
+void main() => runApp(MarioLikeGameApp());
 
-class MyApp extends StatelessWidget {
-  // This widget is the root of your application.
+class MarioLikeGameApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // Try running your application with "flutter run". You'll see the
-        // application has a blue toolbar. Then, without quitting the app, try
-        // changing the primarySwatch below to Colors.green and then invoke
-        // "hot reload" (press "r" in the console where you ran "flutter run",
-        // or simply save your changes to "hot reload" in a Flutter IDE).
-        // Notice that the counter didn't reset back to zero; the application
-        // is not restarted.
-        primarySwatch: Colors.blue,
+      debugShowCheckedModeBanner: false,
+      title: 'Super Platformer',
+      theme: ThemeData.dark().copyWith(
+        scaffoldBackgroundColor: const Color(0xFF0D1B2A),
       ),
-      home: MyHomePage(title: 'Flutter Demo - Multiselect'),
+      home: GamePage(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  MyHomePage({Key key, this.title}) : super(key: key);
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
-
+class GamePage extends StatefulWidget {
   @override
-  _MyHomePageState createState() => _MyHomePageState();
+  _GamePageState createState() => _GamePageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  final GlobalKey<FormState> _formKey = new GlobalKey<FormState>();
+class _GamePageState extends State<GamePage> {
+  static const double worldWidth = 2400;
+  static const double worldHeight = 480;
+  static const double gravity = 0.8;
+
+  Timer _timer;
+  double _playerX = 60;
+  double _playerY = 100;
+  double _velocityY = 0;
+  double _velocityX = 0;
+  bool _moveLeft = false;
+  bool _moveRight = false;
+  bool _onGround = false;
+
+  int _levelIndex = 0;
+  int _score = 0;
+  int _lives = 3;
+
+  List<LevelData> _levels;
+  List<CoinData> _coins;
+  List<EnemyData> _enemies;
+
+  @override
+  void initState() {
+    super.initState();
+    _levels = _buildLevels();
+    _loadLevel(0, fullReset: true);
+    _timer = Timer.periodic(const Duration(milliseconds: 16), _tick);
+  }
+
+  @override
+  void dispose() {
+    _timer.cancel();
+    super.dispose();
+  }
+
+  void _tick(Timer timer) {
+    if (!mounted) return;
+
+    final LevelData level = _levels[_levelIndex];
+
+    _velocityX = 0;
+    if (_moveLeft) _velocityX = -4.0;
+    if (_moveRight) _velocityX = 4.0;
+
+    _playerX += _velocityX;
+    _velocityY += gravity;
+    _playerY += _velocityY;
+
+    _onGround = false;
+
+    if (_playerY + 42 >= worldHeight) {
+      _playerY = worldHeight - 42;
+      _velocityY = 0;
+      _onGround = true;
+    }
+
+    for (final PlatformData platform in level.platforms) {
+      if (_playerX + 28 > platform.x &&
+          _playerX < platform.x + platform.width &&
+          _playerY + 42 >= platform.y &&
+          _playerY + 42 <= platform.y + 18 &&
+          _velocityY >= 0) {
+        _playerY = platform.y - 42;
+        _velocityY = 0;
+        _onGround = true;
+      }
+    }
+
+    for (final SpikeData spike in level.spikes) {
+      if (_overlap(
+        _playerX,
+        _playerY,
+        28,
+        42,
+        spike.x,
+        spike.y,
+        spike.width,
+        spike.height,
+      )) {
+        _loseLife();
+        return;
+      }
+    }
+
+    for (final EnemyData enemy in _enemies) {
+      enemy.x += enemy.direction * 1.4;
+      if (enemy.x < enemy.minX || enemy.x > enemy.maxX) {
+        enemy.direction *= -1;
+      }
+
+      if (_overlap(_playerX, _playerY, 28, 42, enemy.x, enemy.y, 30, 24)) {
+        if (_velocityY > 2 && _playerY + 34 < enemy.y + 10) {
+          enemy.alive = false;
+          _velocityY = -9;
+          _score += 150;
+        } else {
+          _loseLife();
+          return;
+        }
+      }
+    }
+
+    _enemies.removeWhere((EnemyData e) => !e.alive);
+
+    for (final CoinData coin in _coins) {
+      if (!coin.collected &&
+          _overlap(_playerX, _playerY, 28, 42, coin.x, coin.y, 16, 16)) {
+        coin.collected = true;
+        _score += 100;
+      }
+    }
+
+    if (_playerY > worldHeight + 100) {
+      _loseLife();
+      return;
+    }
+
+    if (_playerX + 24 > level.goalX) {
+      if (_levelIndex == _levels.length - 1) {
+        _showEndDialog('Victoire !',
+            'Tu as terminé les 5 niveaux avec $_score points.');
+      } else {
+        _loadLevel(_levelIndex + 1);
+      }
+      return;
+    }
+
+    _playerX = _playerX.clamp(0.0, worldWidth - 28);
+    setState(() {});
+  }
+
+  bool _overlap(double x1, double y1, double w1, double h1, double x2, double y2,
+      double w2, double h2) {
+    return x1 < x2 + w2 && x1 + w1 > x2 && y1 < y2 + h2 && y1 + h1 > y2;
+  }
+
+  void _jump() {
+    if (_onGround) {
+      _velocityY = -13;
+    }
+  }
+
+  void _loseLife() {
+    _lives -= 1;
+    if (_lives <= 0) {
+      _showEndDialog('Game Over', 'Tu as perdu toutes tes vies.');
+      return;
+    }
+    _respawn();
+  }
+
+  void _respawn() {
+    final LevelData level = _levels[_levelIndex];
+    _playerX = level.spawnX;
+    _playerY = level.spawnY;
+    _velocityY = 0;
+  }
+
+  void _loadLevel(int newLevel, {bool fullReset = false}) {
+    _levelIndex = newLevel;
+    final LevelData level = _levels[_levelIndex];
+
+    if (fullReset) {
+      _score = 0;
+      _lives = 3;
+    }
+
+    _coins = level.coins
+        .map((CoinData c) => CoinData(c.x.toDouble(), c.y.toDouble()))
+        .toList();
+    _enemies = level.enemies
+        .map((EnemyData e) => EnemyData(e.x, e.y, e.minX, e.maxX))
+        .toList();
+
+    _playerX = level.spawnX;
+    _playerY = level.spawnY;
+    _velocityY = 0;
+    setState(() {});
+  }
+
+  void _restartFromStart() {
+    _loadLevel(0, fullReset: true);
+    Navigator.of(context).pop();
+  }
+
+  void _showEndDialog(String title, String message) {
+    _timer.cancel();
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text(title),
+          content: Text(message),
+          actions: <Widget>[
+            FlatButton(
+              child: const Text('Rejouer'),
+              onPressed: () {
+                _restartFromStart();
+                _timer = Timer.periodic(const Duration(milliseconds: 16), _tick);
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final Size size = MediaQuery.of(context).size;
+    final LevelData level = _levels[_levelIndex];
+    final double cameraX = (_playerX - size.width * 0.35)
+        .clamp(0.0, worldWidth - size.width)
+        .toDouble();
+
     return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.title),
-      ),
-      body: Center(
-        child: new Form(
-          key: _formKey,
-          autovalidate: true,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: <Widget>[
-              Padding(
-                padding: const EdgeInsets.all(8.0),
-                child: new MultiSelect(
-                    autovalidate: true,
-                    initialValue: ['IN', 'US'],
-                    titleText: 'Country of Residence',
-                    maxLength: 5, // optional
-                    validator: (dynamic value) {
-                      if (value == null) {
-                        return 'Please select one or more option(s)';
-                      }
-                      return null;
-                    },
-                    errorText: 'Please select one or more option(s)',
-                    dataSource: [
-    {"name": "Afghanistan", "code": "AF"},
-    {"name": "Åland Islands", "code": "AX"},
-    {"name": "Albania", "code": "AL"},
-    {"name": "Algeria", "code": "DZ"},
-    {"name": "American Samoa", "code": "AS"},
-    {"name": "AndorrA", "code": "AD"},
-    {"name": "Angola", "code": "AO"},
-    {"name": "Anguilla", "code": "AI"},
-    {"name": "Antarctica", "code": "AQ"},
-    {"name": "Antigua and Barbuda", "code": "AG"},
-    {"name": "Argentina", "code": "AR"},
-    {"name": "Armenia", "code": "AM"},
-    {"name": "Aruba", "code": "AW"},
-    {"name": "Australia", "code": "AU"},
-    {"name": "Austria", "code": "AT"},
-    {"name": "Azerbaijan", "code": "AZ"},
-    {"name": "Bahamas", "code": "BS"},
-    {"name": "Bahrain", "code": "BH"},
-    {"name": "Bangladesh", "code": "BD"},
-    {"name": "Barbados", "code": "BB"},
-    {"name": "Belarus", "code": "BY"},
-    {"name": "Belgium", "code": "BE"},
-    {"name": "Belize", "code": "BZ"},
-    {"name": "Benin", "code": "BJ"},
-    {"name": "Bermuda", "code": "BM"},
-    {"name": "Bhutan", "code": "BT"},
-    {"name": "Bolivia", "code": "BO"},
-    {"name": "Bosnia and Herzegovina", "code": "BA"},
-    {"name": "Botswana", "code": "BW"},
-    {"name": "Bouvet Island", "code": "BV"},
-    {"name": "Brazil", "code": "BR"},
-    {"name": "British Indian Ocean Territory", "code": "IO"},
-    {"name": "Brunei Darussalam", "code": "BN"},
-    {"name": "Bulgaria", "code": "BG"},
-    {"name": "Burkina Faso", "code": "BF"},
-    {"name": "Burundi", "code": "BI"},
-    {"name": "Cambodia", "code": "KH"},
-    {"name": "Cameroon", "code": "CM"},
-    {"name": "Canada", "code": "CA"},
-    {"name": "Cape Verde", "code": "CV"},
-    {"name": "Cayman Islands", "code": "KY"},
-    {"name": "Central African Republic", "code": "CF"},
-    {"name": "Chad", "code": "TD"},
-    {"name": "Chile", "code": "CL"},
-    {"name": "China", "code": "CN"},
-    {"name": "Christmas Island", "code": "CX"},
-    {"name": "Cocos (Keeling) Islands", "code": "CC"},
-    {"name": "Colombia", "code": "CO"},
-    {"name": "Comoros", "code": "KM"},
-    {"name": "Congo", "code": "CG"},
-    {"name": "Congo, The Democratic Republic of the", "code": "CD"},
-    {"name": "Cook Islands", "code": "CK"},
-    {"name": "Costa Rica", "code": "CR"},
-    {"name": "Cote D\'Ivoire", "code": "CI"},
-    {"name": "Croatia", "code": "HR"},
-    {"name": "Cuba", "code": "CU"},
-    {"name": "Cyprus", "code": "CY"},
-    {"name": "Czech Republic", "code": "CZ"},
-    {"name": "Denmark", "code": "DK"},
-    {"name": "Djibouti", "code": "DJ"},
-    {"name": "Dominica", "code": "DM"},
-    {"name": "Dominican Republic", "code": "DO"},
-    {"name": "Ecuador", "code": "EC"},
-    {"name": "Egypt", "code": "EG"},
-    {"name": "El Salvador", "code": "SV"},
-    {"name": "Equatorial Guinea", "code": "GQ"},
-    {"name": "Eritrea", "code": "ER"},
-    {"name": "Estonia", "code": "EE"},
-    {"name": "Ethiopia", "code": "ET"},
-    {"name": "Falkland Islands (Malvinas)", "code": "FK"},
-    {"name": "Faroe Islands", "code": "FO"},
-    {"name": "Fiji", "code": "FJ"},
-    {"name": "Finland", "code": "FI"},
-    {"name": "France", "code": "FR"},
-    {"name": "French Guiana", "code": "GF"},
-    {"name": "French Polynesia", "code": "PF"},
-    {"name": "French Southern Territories", "code": "TF"},
-    {"name": "Gabon", "code": "GA"},
-    {"name": "Gambia", "code": "GM"},
-    {"name": "Georgia", "code": "GE"},
-    {"name": "Germany", "code": "DE"},
-    {"name": "Ghana", "code": "GH"},
-    {"name": "Gibraltar", "code": "GI"},
-    {"name": "Greece", "code": "GR"},
-    {"name": "Greenland", "code": "GL"},
-    {"name": "Grenada", "code": "GD"},
-    {"name": "Guadeloupe", "code": "GP"},
-    {"name": "Guam", "code": "GU"},
-    {"name": "Guatemala", "code": "GT"},
-    {"name": "Guernsey", "code": "GG"},
-    {"name": "Guinea", "code": "GN"},
-    {"name": "Guinea-Bissau", "code": "GW"},
-    {"name": "Guyana", "code": "GY"},
-    {"name": "Haiti", "code": "HT"},
-    {"name": "Heard Island and Mcdonald Islands", "code": "HM"},
-    {"name": "Holy See (Vatican City State)", "code": "VA"},
-    {"name": "Honduras", "code": "HN"},
-    {"name": "Hong Kong", "code": "HK"},
-    {"name": "Hungary", "code": "HU"},
-    {"name": "Iceland", "code": "IS"},
-    {"name": "India", "code": "IN"},
-    {"name": "Indonesia", "code": "ID"},
-    {"name": "Iran, Islamic Republic Of", "code": "IR"},
-    {"name": "Iraq", "code": "IQ"},
-    {"name": "Ireland", "code": "IE"},
-    {"name": "Isle of Man", "code": "IM"},
-    {"name": "Israel", "code": "IL"},
-    {"name": "Italy", "code": "IT"},
-    {"name": "Jamaica", "code": "JM"},
-    {"name": "Japan", "code": "JP"},
-    {"name": "Jersey", "code": "JE"},
-    {"name": "Jordan", "code": "JO"},
-    {"name": "Kazakhstan", "code": "KZ"},
-    {"name": "Kenya", "code": "KE"},
-    {"name": "Kiribati", "code": "KI"},
-    {"name": "Korea, Democratic People\'s Republic of", "code": "KP"},
-    {"name": "Korea, Republic of", "code": "KR"},
-    {"name": "Kuwait", "code": "KW"},
-    {"name": "Kyrgyzstan", "code": "KG"},
-    {"name": "Lao People\'s Democratic Republic", "code": "LA"},
-    {"name": "Latvia", "code": "LV"},
-    {"name": "Lebanon", "code": "LB"},
-    {"name": "Lesotho", "code": "LS"},
-    {"name": "Liberia", "code": "LR"},
-    {"name": "Libyan Arab Jamahiriya", "code": "LY"},
-    {"name": "Liechtenstein", "code": "LI"},
-    {"name": "Lithuania", "code": "LT"},
-    {"name": "Luxembourg", "code": "LU"},
-    {"name": "Macao", "code": "MO"},
-    {"name": "Macedonia, The Former Yugoslav Republic of", "code": "MK"},
-    {"name": "Madagascar", "code": "MG"},
-    {"name": "Malawi", "code": "MW"},
-    {"name": "Malaysia", "code": "MY"},
-    {"name": "Maldives", "code": "MV"},
-    {"name": "Mali", "code": "ML"},
-    {"name": "Malta", "code": "MT"},
-    {"name": "Marshall Islands", "code": "MH"},
-    {"name": "Martinique", "code": "MQ"},
-    {"name": "Mauritania", "code": "MR"},
-    {"name": "Mauritius", "code": "MU"},
-    {"name": "Mayotte", "code": "YT"},
-    {"name": "Mexico", "code": "MX"},
-    {"name": "Micronesia, Federated States of", "code": "FM"},
-    {"name": "Moldova, Republic of", "code": "MD"},
-    {"name": "Monaco", "code": "MC"},
-    {"name": "Mongolia", "code": "MN"},
-    {"name": "Montserrat", "code": "MS"},
-    {"name": "Morocco", "code": "MA"},
-    {"name": "Mozambique", "code": "MZ"},
-    {"name": "Myanmar", "code": "MM"},
-    {"name": "Namibia", "code": "NA"},
-    {"name": "Nauru", "code": "NR"},
-    {"name": "Nepal", "code": "NP"},
-    {"name": "Netherlands", "code": "NL"},
-    {"name": "Netherlands Antilles", "code": "AN"},
-    {"name": "New Caledonia", "code": "NC"},
-    {"name": "New Zealand", "code": "NZ"},
-    {"name": "Nicaragua", "code": "NI"},
-    {"name": "Niger", "code": "NE"},
-    {"name": "Nigeria", "code": "NG"},
-    {"name": "Niue", "code": "NU"},
-    {"name": "Norfolk Island", "code": "NF"},
-    {"name": "Northern Mariana Islands", "code": "MP"},
-    {"name": "Norway", "code": "NO"},
-    {"name": "Oman", "code": "OM"},
-    {"name": "Pakistan", "code": "PK"},
-    {"name": "Palau", "code": "PW"},
-    {"name": "Palestinian Territory, Occupied", "code": "PS"},
-    {"name": "Panama", "code": "PA"},
-    {"name": "Papua New Guinea", "code": "PG"},
-    {"name": "Paraguay", "code": "PY"},
-    {"name": "Peru", "code": "PE"},
-    {"name": "Philippines", "code": "PH"},
-    {"name": "Pitcairn", "code": "PN"},
-    {"name": "Poland", "code": "PL"},
-    {"name": "Portugal", "code": "PT"},
-    {"name": "Puerto Rico", "code": "PR"},
-    {"name": "Qatar", "code": "QA"},
-    {"name": "Reunion", "code": "RE"},
-    {"name": "Romania", "code": "RO"},
-    {"name": "Russian Federation", "code": "RU"},
-    {"name": "RWANDA", "code": "RW"},
-    {"name": "Saint Helena", "code": "SH"},
-    {"name": "Saint Kitts and Nevis", "code": "KN"},
-    {"name": "Saint Lucia", "code": "LC"},
-    {"name": "Saint Pierre and Miquelon", "code": "PM"},
-    {"name": "Saint Vincent and the Grenadines", "code": "VC"},
-    {"name": "Samoa", "code": "WS"},
-    {"name": "San Marino", "code": "SM"},
-    {"name": "Sao Tome and Principe", "code": "ST"},
-    {"name": "Saudi Arabia", "code": "SA"},
-    {"name": "Senegal", "code": "SN"},
-    {"name": "Serbia and Montenegro", "code": "CS"},
-    {"name": "Seychelles", "code": "SC"},
-    {"name": "Sierra Leone", "code": "SL"},
-    {"name": "Singapore", "code": "SG"},
-    {"name": "Slovakia", "code": "SK"},
-    {"name": "Slovenia", "code": "SI"},
-    {"name": "Solomon Islands", "code": "SB"},
-    {"name": "Somalia", "code": "SO"},
-    {"name": "South Africa", "code": "ZA"},
-    {"name": "South Georgia and the South Sandwich Islands", "code": "GS"},
-    {"name": "Spain", "code": "ES"},
-    {"name": "Sri Lanka", "code": "LK"},
-    {"name": "Sudan", "code": "SD"},
-    {"name": "Suriname", "code": "SR"},
-    {"name": "Svalbard and Jan Mayen", "code": "SJ"},
-    {"name": "Swaziland", "code": "SZ"},
-    {"name": "Sweden", "code": "SE"},
-    {"name": "Switzerland", "code": "CH"},
-    {"name": "Syrian Arab Republic", "code": "SY"},
-    {"name": "Taiwan, Province of China", "code": "TW"},
-    {"name": "Tajikistan", "code": "TJ"},
-    {"name": "Tanzania, United Republic of", "code": "TZ"},
-    {"name": "Thailand", "code": "TH"},
-    {"name": "Timor-Leste", "code": "TL"},
-    {"name": "Togo", "code": "TG"},
-    {"name": "Tokelau", "code": "TK"},
-    {"name": "Tonga", "code": "TO"},
-    {"name": "Trinidad and Tobago", "code": "TT"},
-    {"name": "Tunisia", "code": "TN"},
-    {"name": "Turkey", "code": "TR"},
-    {"name": "Turkmenistan", "code": "TM"},
-    {"name": "Turks and Caicos Islands", "code": "TC"},
-    {"name": "Tuvalu", "code": "TV"},
-    {"name": "Uganda", "code": "UG"},
-    {"name": "Ukraine", "code": "UA"},
-    {"name": "United Arab Emirates", "code": "AE"},
-    {"name": "United Kingdom", "code": "GB"},
-    {"name": "United States", "code": "US"},
-    {"name": "United States Minor Outlying Islands", "code": "UM"},
-    {"name": "Uruguay", "code": "UY"},
-    {"name": "Uzbekistan", "code": "UZ"},
-    {"name": "Vanuatu", "code": "VU"},
-    {"name": "Venezuela", "code": "VE"},
-    {"name": "Viet Nam", "code": "VN"},
-    {"name": "Virgin Islands, British", "code": "VG"},
-    {"name": "Virgin Islands, U.S.", "code": "VI"},
-    {"name": "Wallis and Futuna", "code": "WF"},
-    {"name": "Western Sahara", "code": "EH"},
-    {"name": "Yemen", "code": "YE"},
-    {"name": "Zambia", "code": "ZM"},
-    {"name": "Zimbabwe", "code": "ZW"}
-    ],
-                    textField: 'name',
-                    valueField: 'code',
-                    filterable: true,
-                    required: true,
-                    onSaved: (value) {
-                      print('The value is $value');
-                    }),
-              ),
-              SizedBox(
-                width: 10.0,
-              ),
-              RaisedButton(
-                child: Text('Save'),
-                color: Colors.white,
-                onPressed: () {
-                  _onFormSaved();
-                },
-              )
-            ],
+      body: Column(
+        children: <Widget>[
+          Container(
+            padding: const EdgeInsets.fromLTRB(16, 36, 16, 12),
+            color: const Color(0xFF102A43),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: <Widget>[
+                Text('Niveau ${_levelIndex + 1}/5'),
+                Text('Score: $_score'),
+                Text('Vies: $_lives'),
+              ],
+            ),
           ),
-        ),
+          Expanded(
+            child: ClipRect(
+              child: Stack(
+                children: <Widget>[
+                  CustomPaint(
+                    size: Size(size.width, size.height),
+                    painter: WorldPainter(
+                      level: level,
+                      cameraX: cameraX,
+                      playerX: _playerX,
+                      playerY: _playerY,
+                      coins: _coins,
+                      enemies: _enemies,
+                    ),
+                  ),
+                  Positioned(
+                    left: 20,
+                    bottom: 22,
+                    child: _ControlButton(
+                      icon: Icons.arrow_left,
+                      onDown: () => _moveLeft = true,
+                      onUp: () => _moveLeft = false,
+                    ),
+                  ),
+                  Positioned(
+                    left: 90,
+                    bottom: 22,
+                    child: _ControlButton(
+                      icon: Icons.arrow_right,
+                      onDown: () => _moveRight = true,
+                      onUp: () => _moveRight = false,
+                    ),
+                  ),
+                  Positioned(
+                    right: 24,
+                    bottom: 22,
+                    child: _ControlButton(
+                      icon: Icons.arrow_upward,
+                      onTap: _jump,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
-      // This trailing comma makes auto-formatting nicer for build methods.
+    );
+  }
+}
+
+class _ControlButton extends StatelessWidget {
+  const _ControlButton({
+    Key key,
+    this.icon,
+    this.onDown,
+    this.onUp,
+    this.onTap,
+  }) : super(key: key);
+
+  final IconData icon;
+  final VoidCallback onDown;
+  final VoidCallback onUp;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTapDown: (_) {
+        if (onDown != null) onDown();
+      },
+      onTapUp: (_) {
+        if (onUp != null) onUp();
+        if (onTap != null) onTap();
+      },
+      onTapCancel: () {
+        if (onUp != null) onUp();
+      },
+      child: Container(
+        width: 58,
+        height: 58,
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.18),
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white54),
+        ),
+        child: Icon(icon, color: Colors.white),
+      ),
+    );
+  }
+}
+
+class WorldPainter extends CustomPainter {
+  WorldPainter({
+    this.level,
+    this.cameraX,
+    this.playerX,
+    this.playerY,
+    this.coins,
+    this.enemies,
+  });
+
+  final LevelData level;
+  final double cameraX;
+  final double playerX;
+  final double playerY;
+  final List<CoinData> coins;
+  final List<EnemyData> enemies;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Rect sky = Rect.fromLTWH(0, 0, size.width, size.height);
+    final Paint skyPaint = Paint()
+      ..shader = const LinearGradient(
+        colors: <Color>[Color(0xFF3A86FF), Color(0xFF87CEEB)],
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+      ).createShader(sky);
+    canvas.drawRect(sky, skyPaint);
+
+    for (int i = 0; i < 8; i++) {
+      final double cloudX = (i * 320.0 - (cameraX * 0.3)) % 2600 - 80;
+      final double cloudY = 45 + (i % 3) * 35.0;
+      _drawCloud(canvas, Offset(cloudX, cloudY));
+    }
+
+    final Paint groundPaint = Paint()..color = const Color(0xFF6A994E);
+    canvas.drawRect(
+      Rect.fromLTWH(-cameraX, _GamePageState.worldHeight, _GamePageState.worldWidth,
+          120),
+      groundPaint,
+    );
+
+    for (final PlatformData platform in level.platforms) {
+      final Rect rect = Rect.fromLTWH(
+        platform.x - cameraX,
+        platform.y,
+        platform.width,
+        platform.height,
+      );
+      canvas.drawRect(rect, Paint()..color = const Color(0xFF8D5524));
+      canvas.drawRect(
+        Rect.fromLTWH(rect.left, rect.top, rect.width, 6),
+        Paint()..color = const Color(0xFFB08968),
+      );
+    }
+
+    for (final SpikeData spike in level.spikes) {
+      final Path p = Path()
+        ..moveTo(spike.x - cameraX, spike.y + spike.height)
+        ..lineTo(spike.x + spike.width / 2 - cameraX, spike.y)
+        ..lineTo(spike.x + spike.width - cameraX, spike.y + spike.height)
+        ..close();
+      canvas.drawPath(p, Paint()..color = Colors.grey.shade200);
+    }
+
+    for (final CoinData coin in coins) {
+      if (coin.collected) continue;
+      canvas.drawCircle(
+        Offset(coin.x - cameraX + 8, coin.y + 8),
+        8,
+        Paint()..color = const Color(0xFFFFD60A),
+      );
+      canvas.drawCircle(
+        Offset(coin.x - cameraX + 8, coin.y + 8),
+        4,
+        Paint()..color = const Color(0xFFFFEE99),
+      );
+    }
+
+    for (final EnemyData enemy in enemies) {
+      final Rect body = Rect.fromLTWH(enemy.x - cameraX, enemy.y, 30, 24);
+      final RRect r = RRect.fromRectAndRadius(body, const Radius.circular(8));
+      canvas.drawRRect(r, Paint()..color = const Color(0xFF6D597A));
+      canvas.drawCircle(Offset(body.left + 8, body.top + 10), 2, Paint()..color = Colors.white);
+      canvas.drawCircle(Offset(body.left + 22, body.top + 10), 2, Paint()..color = Colors.white);
+    }
+
+    final Rect playerRect = Rect.fromLTWH(playerX - cameraX, playerY, 28, 42);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(playerRect, const Radius.circular(6)),
+      Paint()..color = const Color(0xFFE76F51),
+    );
+    canvas.drawRect(
+      Rect.fromLTWH(playerRect.left, playerRect.top, playerRect.width, 12),
+      Paint()..color = const Color(0xFFEF233C),
+    );
+    canvas.drawCircle(
+      Offset(playerRect.left + 14, playerRect.top + 20),
+      4,
+      Paint()..color = const Color(0xFFFFE0B2),
+    );
+
+    final double flagX = level.goalX - cameraX;
+    canvas.drawRect(
+      Rect.fromLTWH(flagX, 140, 6, _GamePageState.worldHeight - 140),
+      Paint()..color = Colors.white,
+    );
+    canvas.drawPath(
+      Path()
+        ..moveTo(flagX + 6, 150)
+        ..lineTo(flagX + 46, 162)
+        ..lineTo(flagX + 6, 174)
+        ..close(),
+      Paint()..color = const Color(0xFFFF006E),
     );
   }
 
-  void _onFormSaved() {
-    final FormState form = _formKey.currentState;
-    form.save();
+  void _drawCloud(Canvas canvas, Offset o) {
+    final Paint cloud = Paint()..color = Colors.white.withOpacity(0.85);
+    canvas.drawCircle(o + const Offset(0, 10), 16, cloud);
+    canvas.drawCircle(o + const Offset(18, 0), 20, cloud);
+    canvas.drawCircle(o + const Offset(38, 10), 16, cloud);
   }
+
+  @override
+  bool shouldRepaint(covariant WorldPainter oldDelegate) => true;
+}
+
+class LevelData {
+  LevelData({
+    this.spawnX,
+    this.spawnY,
+    this.goalX,
+    this.platforms,
+    this.coins,
+    this.enemies,
+    this.spikes,
+  });
+
+  final double spawnX;
+  final double spawnY;
+  final double goalX;
+  final List<PlatformData> platforms;
+  final List<CoinData> coins;
+  final List<EnemyData> enemies;
+  final List<SpikeData> spikes;
+}
+
+class PlatformData {
+  PlatformData(this.x, this.y, this.width, this.height);
+
+  final double x;
+  final double y;
+  final double width;
+  final double height;
+}
+
+class CoinData {
+  CoinData(this.x, this.y, {this.collected = false});
+
+  final double x;
+  final double y;
+  bool collected;
+}
+
+class EnemyData {
+  EnemyData(this.x, this.y, this.minX, this.maxX)
+      : direction = math.Random().nextBool() ? 1 : -1,
+        alive = true;
+
+  double x;
+  final double y;
+  final double minX;
+  final double maxX;
+  int direction;
+  bool alive;
+}
+
+class SpikeData {
+  SpikeData(this.x, this.y, this.width, this.height);
+
+  final double x;
+  final double y;
+  final double width;
+  final double height;
+}
+
+List<LevelData> _buildLevels() {
+  return <LevelData>[
+    LevelData(
+      spawnX: 50,
+      spawnY: 340,
+      goalX: 2200,
+      platforms: <PlatformData>[
+        PlatformData(220, 370, 140, 20),
+        PlatformData(460, 320, 120, 20),
+        PlatformData(680, 280, 120, 20),
+        PlatformData(940, 350, 180, 20),
+        PlatformData(1260, 300, 150, 20),
+        PlatformData(1540, 250, 140, 20),
+        PlatformData(1770, 330, 200, 20),
+      ],
+      coins: <CoinData>[
+        CoinData(250, 335),
+        CoinData(500, 285),
+        CoinData(710, 245),
+        CoinData(970, 315),
+        CoinData(1290, 265),
+      ],
+      enemies: <EnemyData>[
+        EnemyData(1020, 326, 970, 1120),
+      ],
+      spikes: <SpikeData>[
+        SpikeData(1460, 438, 28, 20),
+        SpikeData(1490, 438, 28, 20),
+      ],
+    ),
+    LevelData(
+      spawnX: 60,
+      spawnY: 340,
+      goalX: 2260,
+      platforms: <PlatformData>[
+        PlatformData(180, 330, 110, 20),
+        PlatformData(380, 300, 100, 20),
+        PlatformData(560, 260, 100, 20),
+        PlatformData(760, 320, 160, 20),
+        PlatformData(1030, 270, 130, 20),
+        PlatformData(1320, 230, 130, 20),
+        PlatformData(1660, 300, 180, 20),
+      ],
+      coins: <CoinData>[
+        CoinData(210, 295),
+        CoinData(590, 225),
+        CoinData(790, 285),
+        CoinData(1060, 235),
+        CoinData(1700, 265),
+        CoinData(1810, 265),
+      ],
+      enemies: <EnemyData>[
+        EnemyData(830, 296, 760, 900),
+        EnemyData(1710, 276, 1660, 1820),
+      ],
+      spikes: <SpikeData>[
+        SpikeData(960, 438, 28, 20),
+        SpikeData(990, 438, 28, 20),
+        SpikeData(1950, 438, 28, 20),
+      ],
+    ),
+    LevelData(
+      spawnX: 50,
+      spawnY: 330,
+      goalX: 2280,
+      platforms: <PlatformData>[
+        PlatformData(190, 300, 150, 20),
+        PlatformData(430, 260, 120, 20),
+        PlatformData(640, 220, 120, 20),
+        PlatformData(890, 260, 140, 20),
+        PlatformData(1140, 220, 120, 20),
+        PlatformData(1400, 260, 140, 20),
+        PlatformData(1680, 320, 220, 20),
+      ],
+      coins: <CoinData>[
+        CoinData(230, 265),
+        CoinData(460, 225),
+        CoinData(680, 185),
+        CoinData(930, 225),
+        CoinData(1440, 225),
+        CoinData(1730, 285),
+      ],
+      enemies: <EnemyData>[
+        EnemyData(915, 236, 890, 1020),
+        EnemyData(1450, 236, 1400, 1510),
+      ],
+      spikes: <SpikeData>[
+        SpikeData(1210, 438, 28, 20),
+        SpikeData(1240, 438, 28, 20),
+        SpikeData(1270, 438, 28, 20),
+      ],
+    ),
+    LevelData(
+      spawnX: 52,
+      spawnY: 340,
+      goalX: 2300,
+      platforms: <PlatformData>[
+        PlatformData(220, 360, 140, 20),
+        PlatformData(450, 330, 120, 20),
+        PlatformData(640, 290, 120, 20),
+        PlatformData(830, 250, 120, 20),
+        PlatformData(1060, 210, 140, 20),
+        PlatformData(1320, 260, 140, 20),
+        PlatformData(1560, 300, 130, 20),
+        PlatformData(1820, 260, 160, 20),
+      ],
+      coins: <CoinData>[
+        CoinData(250, 325),
+        CoinData(480, 295),
+        CoinData(670, 255),
+        CoinData(860, 215),
+        CoinData(1090, 175),
+        CoinData(1840, 225),
+      ],
+      enemies: <EnemyData>[
+        EnemyData(470, 306, 450, 560),
+        EnemyData(1590, 276, 1560, 1690),
+        EnemyData(1860, 236, 1820, 1970),
+      ],
+      spikes: <SpikeData>[
+        SpikeData(960, 438, 28, 20),
+        SpikeData(990, 438, 28, 20),
+        SpikeData(1020, 438, 28, 20),
+        SpikeData(1710, 438, 28, 20),
+      ],
+    ),
+    LevelData(
+      spawnX: 55,
+      spawnY: 340,
+      goalX: 2330,
+      platforms: <PlatformData>[
+        PlatformData(200, 330, 120, 20),
+        PlatformData(380, 290, 100, 20),
+        PlatformData(540, 250, 100, 20),
+        PlatformData(700, 210, 100, 20),
+        PlatformData(900, 260, 140, 20),
+        PlatformData(1140, 220, 140, 20),
+        PlatformData(1380, 180, 130, 20),
+        PlatformData(1620, 240, 130, 20),
+        PlatformData(1860, 300, 180, 20),
+      ],
+      coins: <CoinData>[
+        CoinData(230, 295),
+        CoinData(410, 255),
+        CoinData(570, 215),
+        CoinData(730, 175),
+        CoinData(930, 225),
+        CoinData(1170, 185),
+        CoinData(1410, 145),
+        CoinData(1885, 265),
+      ],
+      enemies: <EnemyData>[
+        EnemyData(930, 236, 900, 1040),
+        EnemyData(1430, 156, 1380, 1510),
+        EnemyData(1910, 276, 1860, 2040),
+      ],
+      spikes: <SpikeData>[
+        SpikeData(840, 438, 28, 20),
+        SpikeData(870, 438, 28, 20),
+        SpikeData(1530, 438, 28, 20),
+        SpikeData(1560, 438, 28, 20),
+        SpikeData(1590, 438, 28, 20),
+      ],
+    ),
+  ];
 }
